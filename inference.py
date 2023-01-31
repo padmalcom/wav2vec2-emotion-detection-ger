@@ -23,7 +23,7 @@ def speech_file_to_array_fn(path, sampling_rate):
 def predict(path, sampling_rate):
 	speech = speech_file_to_array_fn(path, sampling_rate)
 	features = processor(speech, sampling_rate=sampling_rate, return_tensors="pt", padding=True)
-	
+
 	input_values = features.input_values.to(device)
 	attention_mask = features.attention_mask.to(device)
 
@@ -31,9 +31,9 @@ def predict(path, sampling_rate):
 		logits = model(input_values, attention_mask=attention_mask).logits
 
 	scores = F.softmax(logits, dim=1).detach().cpu().numpy()[0]
-	outputs = [{"Vocalization": config.id2label[i], "Score": f"{round(score * 100, 3):.1f}%"} for i, score in enumerate(scores)]
+	outputs = [{"Emotion": config.id2label[i], "Score": f"{round(score * 100, 3):.1f}%"} for i, score in enumerate(scores)]
 	return outputs
-	
+
 res = predict("test.wav", 16000)
 max = max(res, key=lambda x: x['Score'])
-print("Expected lip popping:", max)
+print("Expected anger:", max)

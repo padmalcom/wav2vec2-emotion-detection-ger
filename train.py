@@ -64,7 +64,7 @@ class CTCTrainer(Trainer):
 	def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
 		model.train()
 		inputs = self._prepare_inputs(inputs)
-		self.use_amp = False
+		self.use_amp = True
 
 		if self.use_amp:
 			with autocast():
@@ -201,7 +201,7 @@ if __name__ == "__main__":
 		gradient_accumulation_steps=2,
 		evaluation_strategy="steps",
 		num_train_epochs=20.0,
-		fp16=False,
+		fp16=True,
 		save_steps=20,
 		eval_steps=10,
 		logging_steps=10,
