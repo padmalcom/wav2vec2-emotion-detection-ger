@@ -8,8 +8,7 @@ from transformers import (
 	Wav2Vec2CTCTokenizer,
 	EvalPrediction,
 	TrainingArguments,
-	Trainer,
-	is_apex_available
+	Trainer
 )
 import glob
 from dataclasses import dataclass
@@ -31,13 +30,6 @@ from packaging import version
 
 from Wav2Vec2ForSpeechClassification import Wav2Vec2ForSpeechClassification
 
-if is_apex_available():
-	from apex import amp
-
-if version.parse(torch.__version__) >= version.parse("1.6"):
-	_is_native_amp_available = True
-	from torch.cuda.amp import autocast
-
 TRAIN_FILE = "train.json"
 TEST_FILE = "test.json"
 LABELS = {'0': 'anger', '1': 'boredom', '2': 'disgust', '3': 'fear', '4': 'happiness', '5': 'sadness', '6': 'neutral'}
@@ -46,44 +38,23 @@ LABEL_LETTER_MAP = {'W': 0, 'L': 1, 'E': 2, 'A': 3, 'F': 4, 'T': 5, 'N': 6}
 INPUT_COLUMN = "path"
 OUTPUT_COLUMN = "label"
 
-#model_name_or_path = "facebook/wav2vec2-base" # does not work since not trained on attention mask. see: https://github.com/huggingface/transformers/issues/12934
+# We need the "self" to get a model with self attention
 model_name_or_path = "facebook/wav2vec2-large-960h-lv60-self"
-#model_name_or_path = "patrickvonplaten/wav2vec2_tiny_random" # does not work
-#model_name_or_path = "hf-internal-testing/tiny-random-wav2vec2-conformer" # does not work
-#model_name_or_path = "patrickvonplaten/tiny-wav2vec2-no-tokenizer" # does not work
-#model_name_or_path = "patrickvonplaten/wav2vec2_tiny_random_robust" # does not work
-#model_name_or_path = "hf-internal-testing/tiny-random-Wav2Vec2ConformerForCTC" # works but bad results
-
-pooling_mode = "mean"
-is_regression = False
 
 # create processor
-processor = Wav2Vec2Processor.from_pretrained(model_name_or_path,)
+processor = Wav2Vec2Processor.from_pretrained(model_name_or_path)
 	
 class CTCTrainer(Trainer):
 	def training_step(self, model: nn.Module, inputs: Dict[str, Union[torch.Tensor, Any]]) -> torch.Tensor:
 		model.train()
 		inputs = self._prepare_inputs(inputs)
-		self.use_amp = True
 
-		if self.use_amp:
-			with autocast():
-				loss = self.compute_loss(model, inputs)
-		else:
-			loss = self.compute_loss(model, inputs)
+		loss = self.compute_loss(model, inputs)
 
 		if self.args.gradient_accumulation_steps > 1:
 			loss = loss / self.args.gradient_accumulation_steps
 
-		if self.use_amp:
-			self.scaler.scale(loss).backward()
-		elif self.use_apex:
-			with amp.scale_loss(loss, self.optimizer) as scaled_loss:
-				scaled_loss.backward()
-		elif self.deepspeed:
-			self.deepspeed.backward(loss)
-		else:
-			loss.backward()
+		loss.backward()
 
 		return loss.detach()		
 		
@@ -116,12 +87,8 @@ class DataCollatorCTCWithPadding:
 
 def compute_metrics(p: EvalPrediction):
 	preds = p.predictions[0] if isinstance(p.predictions, tuple) else p.predictions
-	preds = np.squeeze(preds) if is_regression else np.argmax(preds, axis=1)
-
-	if is_regression:
-		return {"mse": ((preds - p.label_ids) ** 2).mean().item()}
-	else:
-		return {"accuracy": (preds == p.label_ids).astype(np.float32).mean().item()}
+	preds = np.argmax(preds, axis=1)
+	return {"accuracy": (preds == p.label_ids).astype(np.float32).mean().item()}
 
 def prepare_data():
 	data = []
@@ -149,11 +116,7 @@ def prepare_data():
 
 def preprocess_function(examples):
 	speech_list = [audio["array"] for audio in examples["audio"]]
-	target_list = [label for label in examples[OUTPUT_COLUMN]]
-
 	result = processor(speech_list, sampling_rate=16000)
-	#result["labels"] = list(target_list)
-
 	return result
 	
 if __name__ == "__main__":
@@ -175,8 +138,9 @@ if __name__ == "__main__":
 		id2label={i: LABELS[label] for i, label in enumerate(LABELS)},
 		finetuning_task="wav2vec2_clf",
 	)
-	setattr(config, 'pooling_mode', "mean")
-	#config.pooling_mode = "mean"
+	#setattr(config, 'pooling_mode', "mean")
+	# nice visualization https://www.kaggle.com/questions-and-answers/59502
+	config.pooling_mode = "mean"
 	print("label2id", config.label2id)
 	print("id2label", config.id2label)
 	
@@ -192,16 +156,17 @@ if __name__ == "__main__":
 		config=config,
 	)
 	
+	# disable the gradient computation for the feature extractor so that its parameter will not be updated during training
 	model.freeze_feature_extractor()
 	
 	training_args = TrainingArguments(
 		output_dir="./wav2vec/",
-		per_device_train_batch_size=4,
+		per_device_train_batch_size=2,
 		per_device_eval_batch_size=4,
 		gradient_accumulation_steps=2,
 		evaluation_strategy="steps",
 		num_train_epochs=20.0,
-		fp16=True,
+		fp16=False,
 		save_steps=20,
 		eval_steps=10,
 		logging_steps=10,

@@ -31,23 +31,6 @@ class Wav2Vec2ForSpeechClassification(Wav2Vec2PreTrainedModel):
 	def freeze_feature_extractor(self):
 		self.wav2vec2.feature_extractor._freeze_parameters()
 
-	def merged_strategy(
-			self,
-			hidden_states,
-			mode="mean"
-	):
-		if mode == "mean":
-			outputs = torch.mean(hidden_states, dim=1)
-		elif mode == "sum":
-			outputs = torch.sum(hidden_states, dim=1)
-		elif mode == "max":
-			outputs = torch.max(hidden_states, dim=1)[0]
-		else:
-			raise Exception(
-				"The pooling method hasn't been defined! Your pooling mode must be one of these ['mean', 'sum', 'max']")
-
-		return outputs
-
 	def forward(
 			self,
 			input_values,
@@ -66,29 +49,12 @@ class Wav2Vec2ForSpeechClassification(Wav2Vec2PreTrainedModel):
 			return_dict=return_dict,
 		)
 		hidden_states = outputs[0]
-		hidden_states = self.merged_strategy(hidden_states, mode=self.pooling_mode)
+		hidden_states = torch.mean(hidden_states, dim=1)
 		logits = self.classifier(hidden_states)
 
-		loss = None
-		if labels is not None:
-			if self.config.problem_type is None:
-				if self.num_labels == 1:
-					self.config.problem_type = "regression"
-				elif self.num_labels > 1 and (labels.dtype == torch.long or labels.dtype == torch.int):
-					self.config.problem_type = "single_label_classification"
-				else:
-					self.config.problem_type = "multi_label_classification"
-
-			if self.config.problem_type == "regression":
-				loss_fct = MSELoss()
-				loss = loss_fct(logits.view(-1, self.num_labels), labels)
-			elif self.config.problem_type == "single_label_classification":
-				loss_fct = CrossEntropyLoss()
-				loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
-			elif self.config.problem_type == "multi_label_classification":
-				loss_fct = BCEWithLogitsLoss()
-				loss = loss_fct(logits, labels)
-
+		loss_fct = CrossEntropyLoss()
+		loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+				
 		if not return_dict:
 			output = (logits,) + outputs[2:]
 			return ((loss,) + output) if loss is not None else output
